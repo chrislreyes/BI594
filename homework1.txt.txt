@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 
+=======
+My homework1 was done!
+>>>>>>> parent of 84f3d53... revert back to no code
