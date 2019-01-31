@@ -1,1 +1,4 @@
+<<<<<<< HEAD
 My homework1 was done!
+=======
+>>>>>>> parent of 1091388... Add code for homework1 and add a line in homework1.txt
