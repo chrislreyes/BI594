@@ -1,0 +1,174 @@
+---
+title: "Using PCA/CAP to Visualize Population Genetic Data"
+author: "Chris Reyes, Konstantinos Kontodimas, Xuqing Chen"
+date: "March 19, 2019"
+output: html_document
+---
+Population genetics focuses on the genetic variation within and between populations. By studying the genetic structure of a population, we can gain important information relevant to the management of different ecosystems. In marine ecosystems, for example, we can identify resilient corals and their corresponding sites, which can aid coral reef management and may be essential in determining marine protected areas. In order to gain knowledge about the connectivity and gene flow between coral populations, we obtained 2bRAD-sequencing data of corals collected in Mo'orea (North and South) and Tahiti. We were interested in assessing the connectivity between populations from different sites and reef zones (inner and outer). We used the R package 'vegan' to perform PCA and CAP analyses based on identity by state (IBS) as well as covariance. CCA was not a plausible option for analyzing our data based on our environmental factors. Through the CAP analysis, we found divisions of populations between sites but not between reef zones. Our results suggest that CAP is able to detect patterns not found when analyzing the data with PCA alone. 
+
+Version Control:
+R version 3.5.1 (2018-07-02)
+"vegan" 2.5.4
+"adegenet" 2.1.1
+
+```{r}
+###Loading packages and setting up
+library(vegan); #packageVersion("vegan"); citation("vegan")
+library(adegenet); #packageVersion("adegenet"); citation("adegenet")
+
+#Loading bam files
+setwd("C:/Users/clr3y/Desktop/BI598/PartII_radseq/PartII_radseq/radseq_plotting") #change to wherever your bam files are located 
+bams=read.table("bamscl")[,1] # list of bam files
+goods=c(1:length(bams))
+head(goods)
+```
+
+```{r}
+#Loading individual to population correspondences
+i2p=read.table("bamscl_site.txt",sep="\t") # 2-column tab-delimited table of individual assignments to populations; must be in the same order as samples in the bam list or vcf file.
+head(i2p)
+row.names(i2p)=i2p[,1]
+i2p=i2p[goods,]
+site=i2p[,2]
+head(i2p)
+```
+
+```{r}
+#Setting up colors for plotting
+palette(topo.colors(length(unique(site))))
+colors=as.numeric(as.factor(site))
+colpops=as.numeric(as.factor(sort(unique(site))))
+```
+
+```{r}
+#clustering / PCoA based on identity by state (IBS) based on single read resampling (for low and/or uneven coverage)
+
+ma = as.matrix(read.table("myresult.ibsMat")) #Load IBS data
+ma=ma[goods,goods]
+head(ma)
+length(ma)
+dimnames(ma)=list(bams[goods],bams[goods]) #Change the row and column names
+hc=hclust(as.dist(ma),"ave") #clustering by average distance
+plot(hc,cex=0.7) #plot dendrogram
+```
+
+Based on the clustering, we suspect that two samples are potentially clones and upon further investigation should be removed from further analysis.
+
+```{r}
+#Performing PCoA
+head(site)
+conds=data.frame(cbind(site))
+head(conds)
+pp0=capscale(ma~1)
+
+adonis(ma~site,conds) #significance of by-site divergence
+
+#Plot eigenvectors
+plot(pp0$CA$eig)
+
+#Plotting the PCoA
+axes2plot=c(1,2)
+cmd=pp0
+plot(cmd,choices=axes2plot,display="sites",type="n", xlab="PCoA1", ylab="PCoA2") # choices-axes to display
+points(cmd,choices=axes2plot,display="sites",scaling="species", pch=19,transp(col=colors,alpha=0.7))
+#ordihull(cmd,choices= axes2plot,groups= conds$grp,draw="polygon",col=1+as.numeric(unique(as.factor(conds$grp))),label=T)
+ordispider(cmd,choices= axes2plot,groups=conds$site,col="grey80")
+ordiellipse(cmd,choices= axes2plot,groups= conds$site,draw="polygon",col=colpops,label=T)
+
+#Plot the PCA unscaled to identify outliers
+plot(cmd$CA$u[,axes2plot],pch=19,col=colors, xlab="PCA1", ylab="PCA2")
+ordispider(cmd$CA$u[,axes2plot],groups=conds$site,col="grey80")
+ordiellipse(cmd$CA$u[,axes2plot],groups= conds$site,draw="polygon",col=colpops,label=T)
+identify(cmd$CA$u[,axes2plot],labels=colnames(ma),n=3,cex=0.7)
+```
+
+By-site divergence was found to be significant (p=.001), but it fails to explain a majority of the variance (R-squared=.00911). Sites cluster but also overlap to varying extents.
+
+```{r}
+#Performing CAP
+pp=capscale(ma~site,as.factor(conds))
+
+#Plot eigenvectors
+plot(pp$CA$eig)
+
+#Plotting the CAP
+axes2plot=c(1,2)
+plot(pp,choices=axes2plot,display="sites",type="n") # choices-axes to display
+points(pp,choices=axes2plot,display="sites",scaling="species", pch=19,transp(col=colors,alpha=0.7))
+#ordihull(pp,choices= axes2plot,groups= conds$grp,draw="polygon",col=1+as.numeric(unique(as.factor(conds$grp))),label=T)
+ordispider(pp,choices= axes2plot,groups=conds$site,col="grey80")
+ordiellipse(pp,choices= axes2plot,groups= conds$site,draw="polygon",col=colpops,label=T)
+
+#Plot the MDS unscaled to identify outliers
+plot(pp$CA$u[,axes2plot],pch=19,col=colors)
+ordispider(pp$CA$u[,axes2plot],groups=conds$site,col="grey80")
+ordiellipse(pp$CA$u[,axes2plot],groups= conds$site,draw="polygon",col=colpops,label=T)
+identify(pp$CA$u[,axes2plot],labels=colnames(ma),n=3,cex=0.7)
+```
+
+Sites are clearly distinguishable and only the two inshore sites from Mo'orea (1 and 3) overlap. Inshore locations (1,3,and 5) cluster closer together regardless of site and the same is true for offshore locations (2,4,and 6). The sites from Tahiti (5 and 6) are clearly separated from the sites from Mo'orea (1-4).
+
+```{r}
+#Clustering / PCA based on covariance based on single read resampling
+##An alternate method to clustering by IBS
+co = as.matrix(read.table("myresult.covMat")) # covariance based on single-read resampling
+co =co[goods,goods]
+dimnames(co)=list(bams[goods],bams[goods])
+```
+
+```{r}
+#Performing PCA (using covariate)  
+conds=data.frame(cbind(site))
+pp0=capscale(as.dist(1-cov2cor(co))~1)
+
+#Significance of by-site divergence, based on 1-correlation as distance
+adonis(as.dist(1-cov2cor(co))~site,conds)
+
+#Plot eigenvectors
+plot(pp0$CA$eig) 
+
+#Plot PCA
+axes2plot=c(1,2)  
+cc=pp0
+plot(cc,choices=axes2plot,type="n", xlab="PCA1", ylab="PCA2") # choices - axes to display
+points(cc,choices=axes2plot,pch=19,col=colors)
+#ordihull(cc,choices= axes2plot,groups= conds$grp,draw="polygon",col=1+as.numeric(unique(as.factor(conds$grp))),label=T)
+ordispider(cc,choices= axes2plot,groups=conds$site,col="grey80")
+ordiellipse(cc,choices= axes2plot,groups= conds$site,draw="polygon",col=colpops,label=T)
+```
+
+The same is true as before. All sites cluster independently but overlap. By-site divergence is significant (p=.001), but fails to explain a majority of the variance (R-squared=.00907).
+
+```{r}
+#Performing CAP (using covariate)
+pp=capscale(as.dist(1-cov2cor(co))~site,conds) # CAP
+
+#Plot eigenvectors
+plot(pp$CA$eig) 
+
+#Plot CAP
+axes2plot=c(1,2)  
+cv=pp
+plot(cv,choices=axes2plot,type="n", xlab="CAP1", ylab="CAP2") # choices - axes to display
+points(cv,choices=axes2plot,pch=19,col=colors)
+#ordihull(cv,choices= axes2plot,groups= conds$grp,draw="polygon",col=1+as.numeric(unique(as.factor(conds$grp))),label=T)
+ordispider(cv,choices= axes2plot,groups=conds$site,col="grey80")
+ordiellipse(cv,choices= axes2plot,groups= conds$site,draw="polygon",col=colpops,label=T)
+```
+
+When using covariances for the analysis, sites are clearly distinguishable with the two MNW sites from Mo'orea (1 and 2) overlapping slightly. Inshore and offshore locations do not cluster as before. The sites from Tahiti (5 and 6), however, are still clearly separated from the sites from Mo'orea (1-4).
+
+
+CCA: canonical correspondence analysis
+A CCA analysis is not possible to be done on this data. CCA analysis requires the use of a chi-square matrix and is interested in assessing how much of the variability can be explained by continuous environmental variables. Factors that are discrete or deterministic, such as site and inner v. outer reef, cannot be used in CCA analysis. This type of analysis would be plausible for assessing the effects of temperature, depth, elevation, or any environmental variable with a gradient of values.
+
+Conclusion:
+We wanted to assess the connectivity between populations of corals in Mo'orea and Tahiti from different sites and reef zones. Analyzing the data via IBS and covariance using PCA, we found high connectivity and gene flow between populations from both sites and reef zones. Populations from Tahiti showed only a slight divergence from populations from Mo'orea. By-site divergence was found to be significant but failed to explain variance. Using CAP, by contrast, we found distinct divisions between populations from Mo'orea and Tahiti when analyzing both IBS and covariance. Covariance mainly showed the connectivity between the sites on the respective islands but did not show differences between reef zones. IBS showed clearly divisions between reef zones in addition to divisions by islands. Given that we saw such stark differences between PCA and CAP, future studies should be done implementing other analysis methods to further assess conncectivity between populations.
+
+References:
+
+Jombart T, Ahmed I. (2011). adegenet 1.3-1: new tools for the analysis of genome-wide SNP data. Bioinformatics. doi: 10.1093/bioinformatics/btr521
+
+Jombart T. (2008) adegenet: a R package for the multivariate analysis of genetic markers. Bioinformatics 24: 1403-1405. doi: 10.1093/bioinformatics/btn129
+
+Oksanen J, Blanchet FG, Friendly M, Kindt R, Legendre P, McGlinn D, Minchin PR, O'Hara RB, Simpson GL, Solymos P, Stevens MHH, Szoecs E, Wagner H. (2019).vegan: Community Ecology Package. R package version 2.5-4. https://CRAN.R-project.org/package=vegan
