@@ -1,0 +1,504 @@
+---
+title: "Assessing the gene expression of Crepidula fornicata under pH stress"
+author: "Christopher Reyes, Kostas Kontodimas, Xuqing Chen"
+date: "April 4, 2019"
+output: html_document
+---
+Ocean acidification (OA), the lowering of the ocean's pH as a result of increased carbon emissions, is known to affect the growth and metamorphosis of mollusks. We were interested in assessing whether the physiological effects typically seen from exposure to OA coincide with the expression of genes in the intertidal snail Crepidula fornicata. As part of a larger experiment, we obtained RNAseq data from snails exposed to two different pH treatments (7.5, 8.0) over the course of 48 hours and analyzed them using DESeq2 and GO analyses. Although samples were collected after 4 hours, 10 hours, 24 hours, and 48 hours of exposure, here we analyze only samples from snails exposed for 48 hours. We found 11 upregulated differentially expressed genes (DEGs) between the 7.5 treatment and the control and 14 downregulated DEGs. THE PCA clusters by treatment, but the two treatments overlap and the difference between treatments is not significant (p=0.086). Go enrichment analysis shows that while positively enriched genes are primarily involved in functions related to the nucleus and chromosomes, negatively enriched genes are involved with functions related to ribosomes and proteins.
+
+Version Control:
+R version 3.5.1 (2018-07-02)
+"DESeq" 1.34.1
+"affycoretools" 1.54.0
+"arrayQualityMetrics" 3.38.0
+"genefilter" 1.64.0
+"DESeq2" 1.22.2
+"ggplot2" 3.1.0
+"dplyr" 0.8.0.1
+"RColorBrewer" 1.1.2
+"gplots" 3.0.1.1
+"pheatmap" 1.0.12
+"vegan" 2.5.4
+"ggrepel" 0.8.0
+"tidyverse" 1.2.1 
+
+```{r}
+#Array Quality Metrics
+###Loading packages and setting up
+source("http://bioconductor.org/biocLite.R")
+#biocLite("DESeq2")
+#BiocManager::install("package_name") #use to install whatever packages you might be missing
+
+library(DESeq); #packageVersion("DESeq"); citation("DESeq")
+library(affycoretools); #packageVersion("affycoretools"); citation("affycoretools")
+library(arrayQualityMetrics); #packageVersion("arrayQualityMetrics"); citation("arrayQualityMetrics")
+library(genefilter); #packageVersion("genefilter"); citation("genefilter")
+
+#conduct array quality metrics to get rid of outliers
+#read in counts 
+countData <- read.table("brood37_2017.txt")
+head(countData)
+length(countData[,1])
+#20788
+row.names(countData)=sub("", "isogroup", rownames(countData))
+head(countData)
+
+treat=c( "pH8", "pH8",  "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8",  "pH8", "pH8")
+hour=as.factor(c( "0", "0", "0", "0", "10",  "10", "10",  "10", "10", "10", "10", "10", "24", "24", "24", "24", "24", "24",  "24", "24",
+                  "48", "48", "48","48", "48", "48", "48", "48", "4","4", "4", "4", "4", "4", "4", "4"))
+conditions=data.frame(treat, hour)
+nrow(conditions) 
+ncol(countData)
+real=newCountDataSet(countData,conditions) 
+real=estimateSizeFactors(real)
+plot(sort(sizeFactors(real))) 
+
+cds=estimateDispersions(real,method="blind")
+vsdBlind=varianceStabilizingTransformation(cds)
+
+arrayQualityMetrics(vsdBlind,intgroup=c("treat"), force=TRUE)
+```
+
+Based on the arrayQualityMetrics, we determined that there are 5 outliers in our dataset. These samples are b37_10_7.5_4, b37_24_7.5_2, b37_24_7.5_4, b37_4_8_2, and b37_4_8_4.
+
+```{r}
+#Unloads DESeq before loading DESeq2 since the packages conflict
+detach("package:DESeq", unload=TRUE)
+#Load additional packages and filter data
+library(DESeq2) #packageVersion("DESeq2"); citation("DESeq2")
+library(ggplot2) #packageVersion("ggplot2"); citation("ggplot2")
+library(dplyr) #packageVersion("dplyr"); citation("dplyr")
+library(RColorBrewer) #packageVersion("RColorBrewer"); citation("RColorBrewer")
+library(gplots) #packageVersion("gplots"); citation("gplots")
+library(pheatmap) #packageVersion("pheatmap"); citation("pheatmap")
+library(vegan) #packageVersion("vegan"); citation("vegan")
+library(ggrepel) #packageVersion("ggrepel"); citation("ggrepel")
+library(tidyverse) #packageVersion("tidyverse"); citation("tidyverse")
+
+#read in counts (old data pre-filtered)
+countData <- read.table("brood37_2017.txt")
+head(countData)
+length(countData[,1])
+#20788
+
+names(countData)=sub(".fastq.trim.sam.counts","",names(countData))
+names(countData)
+row.names(countData)=sub("", "isogroup", rownames(countData))
+names(countData)
+
+#removing outlier samples (generally ones that failed to sequence)
+countData$b37_10_7.5_4 <- NULL
+countData$b37_24_7.5_2 <- NULL
+countData$b37_24_7.5_4 <- NULL
+countData$b37_4_8_2 <- NULL
+countData$b37_4_8_4 <- NULL
+
+totalCounts=colSums(countData)
+totalCounts
+barplot(totalCounts)
+#  b37_0_8_1    b37_0_8_2    b37_0_8_3    b37_0_8_4 b37_10_7.5_1 b37_10_7.5_2 
+#336730       356055       333506        94580       293991       428073 
+#b37_10_7.5_3   b37_10_8_1   b37_10_8_2   b37_10_8_3   b37_10_8_4 b37_24_7.5_1 
+#518635       183215       172071       201308       477596       242820 
+#b37_24_7.5_3   b37_24_8_1   b37_24_8_2   b37_24_8_3   b37_24_8_4 b37_48_7.5_1 
+#290971       134158       459242       107132       733579       478810 
+#b37_48_7.5_2 b37_48_7.5_3 b37_48_7.5_4   b37_48_8_1   b37_48_8_2   b37_48_8_3 
+#1013390       132901       235836       352352       744843       221007 
+#b37_48_8_4  b37_4_7.5_1  b37_4_7.5_2  b37_4_7.5_3  b37_4_7.5_4    b37_4_8_1 
+#502253       485919       760918       246193       266035       778342 
+#b37_4_8_3 
+#78335 
+
+min(totalCounts) #78,335
+max(totalCounts)  # 1,013,390
+
+#Remove day 0 data since it can't be compared between treatments (only pH 8 treatment available)
+countData$b37_0_8_1 <- NULL
+countData$b37_0_8_2 <- NULL
+countData$b37_0_8_3 <- NULL
+countData$b37_0_8_4 <- NULL
+
+treat=c( "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8")
+hour=as.factor(c( "10", "10", "10", "10", "10", "10", "10", "24", "24", "24", "24", "24", "24","48", "48", "48","48", "48", "48", "48", "48", "4","4", "4", "4", "4", "4"))
+```
+
+We were only interested in looking at the data for 48 hours and so we had to subset that data from our overall data and use it for subsequent analyses.
+
+```{r}
+#Assess 48 hour data
+g=data.frame(treat, hour)
+g
+colData<- g
+colData48 = colData[colData$hour == 48,]
+
+dds<-DESeqDataSetFromMatrix(countData=countData, colData=colData, design=~treat+hour+treat*hour ) 
+head(dds)
+dds48 = dds[,colData$hour == 48]
+head(dds48)
+design(dds48) = ~treat
+dds48<-DESeq(dds48)
+# estimating size factors
+# estimating dispersions
+# gene-wise dispersion estimates
+# mean-dispersion relationship
+# final dispersion estimates
+# fitting model and testing
+head(dds48)
+res48<- results(dds48)
+
+#Look at dispersions plot
+plotDispEsts(dds48, main="Dispersion plot Snails (Hour 48)")
+```
+
+The dispersion plot has the "hockey stick" look that we would expect. It uses a shrinking method to reduce false positives in the differential expression analysis. Black dots represent genes, the red line is a model fit to the genes, and the blue dots are the genes after they've been processed through the shrinking method. Genes with low dispersion estimates are shrunken towards the curve and are the output for differential expression testing. Dispersion estimates slightly above the curve are also shrunken, but those with extreme high dispersion are not. These genes, shown as surrounded by blue circles, likely do not follow the model assumptions and have higher variability. Shrinking them would only lead to false positives.
+
+```{r}
+###Assess Pco2 treatments: pH8 vs pH7.5
+respH75.48 <- results(dds48, contrast=c("treat","pH7.5","pH8"))
+table(respH75.48$padj<.1)
+table(respH75.48$padj<.05)
+table(respH75.48$padj<.01)
+# 0.1=25/2191
+# 0.05=14/2191
+# 0.01=9/2191
+summary(respH75.48)
+#LFC>0: 11, 0.055%
+#LFC<0: 14, 0.071%
+#Outliers: 0, 0%
+#Low counts: 17659, 89%
+
+nrow(respH75.48[respH75.48$padj<0.05 & !is.na(respH75.48$padj),])  
+# Num significantly differentially expressed genes excluding the no/low count genes   #14
+
+#scatterplot of logarithmic fold changes versus the mean of normalized counts
+plotMA(respH75.48, main="pH8 vs pH7.5 (Hour 48)", ylim=c(-1,1))
+
+results75.48 <- as.data.frame(respH75.48)
+head(results75.48)
+
+nrow(respH75.48[respH75.48$padj<0.1 & respH75.48$log2FoldChange > 0 & !is.na(respH75.48$padj),])
+nrow(respH75.48[respH75.48$padj<0.1 & respH75.48$log2FoldChange < -0 & !is.na(respH75.48$padj),])
+#UP in 7.5 (Hour 48): 11
+#DOWN in 7.5 (Hour 48): 14
+
+write.table(respH75.48, file="b37_7.5.48_2017.txt", quote=F, sep="\t")
+
+cp48 <- read.table("b37_7.5.48_2017.txt")
+head(cp48)
+
+MAttPlot <- function(df) {
+  df$dotcol <- ifelse(df$log2FoldChange > 0 & df$padj < 0.1, 'darkorange',
+                      ifelse(df$log2FoldChange < 0 & df$padj < 0.1, 'cyan3', 'black'))
+  df$baseMean <- log2(df$baseMean)
+  print(head(df))
+  gg <- ggplot(df, aes(baseMean, log2FoldChange)) +
+    geom_point(size = .3, color = df$dotcol) +
+    theme_bw() +
+    theme(panel.grid = element_blank())
+  print(gg)
+}
+
+MAttPlot(cp48)
+#orange dots = upregulated, blue dots = downregulated
+```
+
+The MA-plot shows log2 fold changes attributable to treatment. Points are red if the adjusted p-value is less than 0.1. Arrows at the top and bottom of the figure indicate points outside the margins of the plot.
+
+The Mattplot is similar except it uses a base mean rather than mean of normalized counts. Orange dots are significantly upregulated and blue dots are significantly downregulated. 
+
+```{r}
+##make the GO table for MWU
+cp48$isogroup=row.names(cp48)
+library(dplyr)
+go_input_7.5.48 = cp48 %>%
+  mutate(mutated_p = -log(pvalue)) %>%
+  mutate(mutated_p_updown = ifelse(log2FoldChange < 0, mutated_p*-1, mutated_p*1)) %>%
+  na.omit() %>%
+  select(isogroup, mutated_p_updown)
+head(go_input_7.5.48)
+colnames(go_input_7.5.48) <- c("gene", "pval")
+head(go_input_7.5.48)
+write.csv(go_input_7.5.48, file="b37_7.5.48_rec_GO.csv", quote=F, row.names=FALSE)
+```
+
+```{r}
+#GO enrichment analysis
+#######MF
+# Edit these to match your data file names: 
+input="b37_7.5.48_rec_GO.csv" # two columns of comma-separated values: gene id, continuous measure of significance. To perform standard GO enrichment analysis based on Fisher's exact test, use binary measure (0 or 1, i.e., either sgnificant or not).
+goAnnotations="Crep454_iso2go.tab" # two-column, tab-delimited, one line per gene, multiple GO terms separated by semicolon. If you have multiple lines per gene, use nrify_GOtable.pl prior to running this script.
+goDatabase="go.obo" # download from http://www.geneontology.org/GO.downloads.ontology.shtml
+goDivision="MF" # either MF, or BP, or CC
+source("gomwu.functions.R")
+
+
+# Calculating stats. It might take ~3 min for MF and BP. Do not rerun it if you just want to replot the data with different cutoffs, go straight to gomwuPlot. If you change any of the numeric values below, delete the files that were generated in previos runs first.
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+	perlPath="perl", # replace with full path to perl executable if it is not in your system's PATH already
+	largest=0.1,  # a GO category will not be considered if it contains more than this fraction of the total number of genes
+	smallest=5,   # a GO category should contain at least this many genes to be considered
+	clusterCutHeight=0.25, # threshold for merging similar (gene-sharing) terms. See README for details.
+#	Alternative="g" # by default the MWU test is two-tailed; specify "g" or "l" of you want to test for "greater" or "less" instead. 
+#	Module=TRUE,Alternative="g" # un-remark this if you are analyzing a SIGNED WGCNA module (values: 0 for not in module genes, kME for in-module genes). In the call to gomwuPlot below, specify absValue=0.001 (count number of "good genes" that fall into the module)
+#	Module=TRUE # un-remark this if you are analyzing an UNSIGNED WGCNA module 
+)
+# do not continue if the printout shows that no GO terms pass 10% FDR.
+
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+#	absValue=-log(0.05,10),  # genes with the measure value exceeding this will be counted as "good genes". Specify absValue=0.001 if you are doing Fisher's exact test for standard GO enrichment or analyzing a WGCNA module (all non-zero genes = "good genes").
+	absValue=1,
+	level1=0.1, # FDR threshold for plotting. Specify level1=1 to plot all GO categories containing genes exceeding the absValue.
+	level2=0.05, # FDR cutoff to print in regular (not italic) font.
+	level3=0.01, # FDR cutoff to print in large bold font.
+	txtsize=1.2,    # decrease to fit more on one page, or increase (after rescaling the plot so the tree fits the text) for better "word cloud" effect
+	treeHeight=0.5, # height of the hierarchical clustering tree
+#	colors=c("dodgerblue2","firebrick1","skyblue2","lightcoral") # these are default colors, un-remar and change if needed
+)
+# manually rescale the plot so the tree matches the text 
+# if there are too many categories displayed, try make it more stringent with level1=0.05,level2=0.01,level3=0.001.  
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#######BP
+goDivision="BP" # either MF, or BP, or CC
+
+# Calculating stats. It might take ~3 min for MF and BP. Do not rerun it if you just want to replot the data with different cutoffs, go straight to gomwuPlot. If you change any of the numeric values below, delete the files that were generated in previos runs first.
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl", # replace with full path to perl executable if it is not in your system's PATH already
+           largest=0.1,  # a GO category will not be considered if it contains more than this fraction of the total number of genes
+           smallest=5,   # a GO category should contain at least this many genes to be considered
+           clusterCutHeight=0.25, # threshold for merging similar (gene-sharing) terms. See README for details.
+           #	Alternative="g" # by default the MWU test is two-tailed; specify "g" or "l" of you want to test for "greater" or "less" instead. 
+           #	Module=TRUE,Alternative="g" # un-remark this if you are analyzing a SIGNED WGCNA module (values: 0 for not in module genes, kME for in-module genes). In the call to gomwuPlot below, specify absValue=0.001 (count number of "good genes" that fall into the module)
+           #	Module=TRUE # un-remark this if you are analyzing an UNSIGNED WGCNA module 
+)
+# do not continue if the printout shows that no GO terms pass 10% FDR.
+
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  #	absValue=-log(0.05,10),  # genes with the measure value exceeding this will be counted as "good genes". Specify absValue=0.001 if you are doing Fisher's exact test for standard GO enrichment or analyzing a WGCNA module (all non-zero genes = "good genes").
+                  absValue=1,
+                  level1=0.1, # FDR threshold for plotting. Specify level1=1 to plot all GO categories containing genes exceeding the absValue.
+                  level2=0.05, # FDR cutoff to print in regular (not italic) font.
+                  level3=0.01, # FDR cutoff to print in large bold font.
+                  txtsize=1.2,    # decrease to fit more on one page, or increase (after rescaling the plot so the tree fits the text) for better "word cloud" effect
+                  treeHeight=0.5, # height of the hierarchical clustering tree
+                  #	colors=c("dodgerblue2","firebrick1","skyblue2","lightcoral") # these are default colors, un-remar and change if needed
+)
+# manually rescale the plot so the tree matches the text 
+# if there are too many categories displayed, try make it more stringent with level1=0.05,level2=0.01,level3=0.001.  
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#######CC
+goDivision="CC" # either MF, or BP, or CC
+
+# Calculating stats. It might take ~3 min for MF and BP. Do not rerun it if you just want to replot the data with different cutoffs, go straight to gomwuPlot. If you change any of the numeric values below, delete the files that were generated in previos runs first.
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl", # replace with full path to perl executable if it is not in your system's PATH already
+           largest=0.1,  # a GO category will not be considered if it contains more than this fraction of the total number of genes
+           smallest=5,   # a GO category should contain at least this many genes to be considered
+           clusterCutHeight=0.25, # threshold for merging similar (gene-sharing) terms. See README for details.
+           #	Alternative="g" # by default the MWU test is two-tailed; specify "g" or "l" of you want to test for "greater" or "less" instead. 
+           #	Module=TRUE,Alternative="g" # un-remark this if you are analyzing a SIGNED WGCNA module (values: 0 for not in module genes, kME for in-module genes). In the call to gomwuPlot below, specify absValue=0.001 (count number of "good genes" that fall into the module)
+           #	Module=TRUE # un-remark this if you are analyzing an UNSIGNED WGCNA module 
+)
+# do not continue if the printout shows that no GO terms pass 10% FDR.
+
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  #	absValue=-log(0.05,10),  # genes with the measure value exceeding this will be counted as "good genes". Specify absValue=0.001 if you are doing Fisher's exact test for standard GO enrichment or analyzing a WGCNA module (all non-zero genes = "good genes").
+                  absValue=1,
+                  level1=0.1, # FDR threshold for plotting. Specify level1=1 to plot all GO categories containing genes exceeding the absValue.
+                  level2=0.05, # FDR cutoff to print in regular (not italic) font.
+                  level3=0.01, # FDR cutoff to print in large bold font.
+                  txtsize=1.2,    # decrease to fit more on one page, or increase (after rescaling the plot so the tree fits the text) for better "word cloud" effect
+                  treeHeight=0.5, # height of the hierarchical clustering tree
+                  #	colors=c("dodgerblue2","firebrick1","skyblue2","lightcoral") # these are default colors, un-remar and change if needed
+)
+# manually rescale the plot so the tree matches the text 
+# if there are too many categories displayed, try make it more stringent with level1=0.05,level2=0.01,level3=0.001.  
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+The GO enrichment analyses overall show that positively enriched genes are primarily involved in nuclear and chromosomal function and negatively enriched genes are involved with ribosomal and protein functions.
+
+```{r}
+#Get pvals and make an rlogadata and pval table
+#get pvals
+val7548=cbind(respH75.48$pvalue, respH75.48$padj)
+head(val7548)
+colnames(val7548)=c("pval.7548", "padj.7548")
+length(val7548[,1])
+#20788
+table(complete.cases(val7548))
+# FALSE  TRUE 
+# 18597  2191
+
+#make rlogdata and pvals table
+rlog48=rlogTransformation(dds48, blind=TRUE) 
+rld48=assay(rlog48)
+head(rld48)
+colnames(rld48)=paste(colData48$treat)
+head(rld48)
+length(rld48[,1])
+#20788
+
+rldpvals48=cbind(rld48,val7548)
+head(rldpvals48)
+dim(rldpvals48)
+# [1] 20788    10
+table(complete.cases(rldpvals48))
+# FALSE  TRUE 
+# 18597  2191
+
+write.csv(rldpvals48, "Crep2017_b37Final_RLDandPVALS_48.csv", quote=F)
+```
+
+```{r}
+#Sample distance heatmap 
+sampleDists48 <- dist(t(rld48))
+sampleDistsMatrix48 <- as.matrix(sampleDists48)
+treat48=c( "pH7.5", "pH7.5", "pH7.5", "pH7.5", "pH8", "pH8",  "pH8", "pH8")
+colnames(sampleDistsMatrix48)=paste(treat48)
+rownames(sampleDistsMatrix48)=paste(treat48)
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistsMatrix48,color=colors,cex=0.9,border_color=NA,clustering_distance_rows=sampleDists48,clustering_distance_cols=sampleDists48, main="Sample Distance (Hour 48)")
+```
+
+Generally, sample distances between treatments are larger than within the same treatments, which is expected.
+
+```{r}
+#PCA and adonis
+rld_t48=t(rld48)
+# which(apply(rld_t48, 2, var)==0) #identify which columns have zero variance, PCA will not work on these
+rld_t48 = rld_t48[ , apply(rld_t48, 2, var) != 0] #removes columns with zero variance
+pca <- prcomp(rld_t48,center = TRUE, scale. = TRUE) #Scale = TRUE is advisable
+# head(pca)
+li <- pca$sdev^2 / sum(pca$sdev^2)
+pc1v <- round(li[1] * 100, 1)
+pc2v <- round(li[2] * 100, 1)
+pca_s <- as.data.frame(pca$x)
+head(pca_s)
+pca_s <- pca_s[,c(1,2)]
+pca_s$Samples = row.names(pca_s)
+pca_s$treat=colData48$treat
+head(pca_s)
+
+cbPalette <- c("darkgoldenrod2", "dodgerblue3")
+ggplot(pca_s, aes(PC1, PC2, color = treat, pch = treat)) +
+  geom_point(size=3) +
+  geom_text_repel(aes(label=Samples)) +
+  scale_colour_manual(values=cbPalette)+
+  theme_bw() +
+  geom_density2d(alpha=.5)+
+  geom_polygon(alpha=.2)+
+  xlab(paste0("PC1: ",pc1v,"% variance")) +
+  ylab(paste0("PC2: ",pc2v,"% variance")) 
+
+adonis(pca$x ~ treat, data = pca_s, method='eu', na.rm = TRUE)
+#           # Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)   
+# # treat      1     21601   21601  1.1045 0.15546  0.092 .
+# # Residuals  6    117349   19558         0.84454         
+# # Total      7    138950                 1.00000
+
+```
+
+The PCA shows clear clustering by treatment with overlap between treatments. Clusterings, however, were found to not be significant (p=0.086).
+
+```{r}
+#Heatmap for genes
+source("uniHeatmap.R")
+ccol=colorRampPalette(rev(c("red","chocolate1","#FEE090","grey10", "cyan3","cyan")))(100)
+col0=colorRampPalette(rev(c("chocolate1","#FEE090","grey10", "cyan3","cyan")))(100)
+
+#Hour 48 pH7.5 v pH8
+rldpvals48 <- read.csv(file="Crep2017_b37Final_RLDandPVALS_48.csv", row.names=1)
+head(rldpvals48)
+rld_site48= rldpvals48[,1:8]
+head(rld_site48)
+gg=read.table("Crep454_iso2gene.tab",sep="\t")
+head(gg)
+
+nrow(rldpvals48[rldpvals48$padj.7548<0.01& !is.na(rldpvals48$padj.7548),])
+#9
+
+topnum= 500 # number of DEGS between treatments
+head(rldpvals48)
+top1000=head(rldpvals48[order(rldpvals48$padj.7548), ],topnum)
+head(top1000)
+length(top1000[,1])
+summary(top1000)
+
+head(top1000)
+p.val=0.1 # FDR cutoff
+conds=top1000[top1000$padj.7548<=p.val & !is.na(top1000$padj.7548),]
+length(conds[,1])
+#25
+
+exp=conds[,c(1:8)] # change numbers to be your vsd data columns
+means=apply(exp,1,mean) # means of rows
+explc=exp-means # subtracting them
+head(explc)
+
+pheatmap(explc,cluster_cols=F,scale="row",color=col0, show_rownames = F)
+
+nums=uniHeatmap(vsd=explc,gene.names=gg,metric=top1000$padj.7548, cutoff=0.1,pdf=F,heat.color=ccol,cex=0.8)
+nums # totalCutoffPassing(25), named(5), patternMatching(0)
+```
+
+Among the 25 DEGs, we clearly see separation between treatments. Among those, 5 are named and appear to be related to ribosomes and proteins, indicative of protein synthesis being affected by acidification.
+
+```{r}
+#Heatmap for genes in common
+source("uniHeatmap.R")
+
+#Hour 48
+rldpvals48 <- read.csv(file="Crep2017_b37Final_RLDandPVALS_48.csv", row.names=1)
+head(rldpvals48)
+p.val=0.1 # FDR cutoff
+conds=rldpvals48[rldpvals48$padj.7548<=p.val & !is.na(rldpvals48$padj.7548) & rldpvals48$padj.7548<=p.val & !is.na(rldpvals48$padj.7548),]
+rld_data= conds[,c(1:8)]
+head(rld_data)
+nrow(rld_data)
+gg=read.table("Crep454_iso2gene.tab",sep="\t")
+means=apply(rld_data,1,mean) # means of rows
+explc=rld_data-means # subtracting them
+
+ccol=colorRampPalette(rev(c("red","chocolate1","#FEE090","grey10", "cyan3","cyan")))(100)
+col0=colorRampPalette(rev(c("chocolate1","#FEE090","grey10", "cyan3","cyan")))(100)
+
+pheatmap(explc,cluster_cols=T,scale="row",color=col0, show_rownames = F)
+
+# Make annotation table for pheatmap
+ann = data.frame(cond = c('7.5', '7.5', '7.5', '7.5', '8', '8', '8', '8'))
+rownames(ann) <- names(explc)
+
+# Set colors
+Var1        <- c("darkgoldenrod2", "dodgerblue3")
+names(Var1) <- c("7.5", "8")
+anno_colors <- list(cond = Var1)
+
+pheatmap(as.matrix(explc),annotation_col=ann,annotation_colors=anno_colors,cex=0.8,color=col0,border_color=NA,clustering_distance_rows="correlation",clustering_distance_cols="correlation", show_rownames=T)
+head(conds)
+
+#nums=uniHeatmap(vsd=explc,gene.names=gg, metric=conds$padj.7548, sort=F, cutoff=0.2,pdf=F,heat.color=ccol, annotation_col=ann,annotation_colors=anno_colors,cex=1.2)
+
+```
+
+Conclusion:
+We assessed changes in the gene expression of the intertidal snail Crepidula fornicata after exposure to ocean acidification stress for 48 hours. We found 25 differentially expressed genes (DEGs) between the pH 7.5 and pH 8.0 treatments, with 11 genes upregulated 14 downregulated by the pH 7.5 treatment relative to the control. A non-significant PCA showed that treatments clustered but also overlapped. Go enrichment analysis identified positively enriched genes as ones primarily involved in nuclear and chromosomal function and negatively enriched genes as ones involved with ribosomal and protein functions. These analyses suggests that changes in gene expression can occur over a short period of time, and thus, future studies should aim at analyzing gene expression across various time intervals to get a more holistic representation of how an organism is affected by a stressor.
