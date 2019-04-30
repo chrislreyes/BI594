@@ -1,0 +1,1100 @@
+---
+title: "Effects of ocean acidification on Crepidula fornicata larval gene expression"
+author: "Christopher Reyes, Xuqing Chen"
+date: "May 2, 2019"
+output: html_document
+---
+Increasing carbon dioxide emissions are causing the world's oceans to change. Reductions in seawater pH, a process known as Ocean Acidification (OA), are rapidly altering marine ecosystems and affecting the organisms that inhabit them. OA is known to have negative impacts on the physiology of marine mollusks, directly affecting growth, morphology, and survival. Although the extent of impact is not well understood, early life history stages appear to be especially vulnerable to the effects of OA. As such, we were interested in assessing how OA affects larvae under short time scales and to determine how long it would take for mollusks to exhibit different gene expression patterns. We conducted a 48-hour experiment on the larvae of an intertidal snail, Crepidula fornicata, proven to be highly resilient to environmental stressors. Snails were exposed to two different pH treatments (7.5, 8.0) and samples were collected after 4 hours, 10 hours, 24 hours, and 48 hours of exposure. The resulting RNAseq data was then analyzed using DESeq2 and GO enrichment analyses. Between the 7.5 treatment and the control, we found 18 upregulated differentially expressed genes (DEGs) and 15 downregulated DEGs at hour 48 and 1 upregulated and 1 downregulated at hour 4. We found no DEGs at hours 10 or 24. GO enrichment revealed differential enrichment between hours. Mitochondrial functions and structures were positively enriched at hours 4 and 10, cytoskeleton was positively enriched at hours 4 and 48, and electron transport was positive enriched at hours 10 and 48. Whereas ribsomal structures were negatively enriched at hours 4 and 48, they were positively enriched at hours 10 and 24. Similarly, kinases and nuclear functions were negatively enriched at hour 10 but positively enriched at hour 48, and oxidoreductase was positively enriched at hour 10 but negatively enriched at hour 48. CCA showed that samples clustered more closely by hour rather than treatment, but this relationship was found to not be significant.
+
+Version Control:
+R version 3.5.1 (2018-07-02)
+"DESeq" 1.34.1
+"affycoretools" 1.54.0
+"arrayQualityMetrics" 3.38.0
+"genefilter" 1.64.0
+"DESeq2" 1.22.2
+"ggplot2" 3.1.0
+"dplyr" 0.8.0.1
+"RColorBrewer" 1.1.2
+"gplots" 3.0.1.1
+"pheatmap" 1.0.12
+"vegan" 2.5.4
+"ggrepel" 0.8.0
+"tidyverse" 1.2.1
+"adegenet" 2.1.1
+"WGCNA" 1.67
+
+```{r}
+#Array Quality Metrics
+###Loading packages and setting up
+source("http://bioconductor.org/biocLite.R")
+#biocLite("DESeq2")
+#BiocManager::install("affycoretools", dependencies=TRUE) #use to install whatever packages you might be missing
+
+library(DESeq); #packageVersion("DESeq"); citation("DESeq")
+library(affycoretools); #packageVersion("affycoretools"); citation("affycoretools")
+library(arrayQualityMetrics); #packageVersion("arrayQualityMetrics"); citation("arrayQualityMetrics")
+library(genefilter); #packageVersion("genefilter"); citation("genefilter")
+
+#conduct array quality metrics to get rid of outliers
+#read in counts 
+countData <- read.table("B37_counts_newtranscriptome.txt")
+head(countData)
+length(countData[,1])
+#20788
+#row.names(countData)=sub("", "isogroup", rownames(countData))
+head(countData)
+
+treat=c( "pH8", "pH8",  "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8",  "pH8", "pH8")
+hour=as.factor(c( "0", "0", "0", "0", "10",  "10", "10",  "10", "10", "10", "10", "10", "24", "24", "24", "24", "24", "24",  "24", "24",
+                  "48", "48", "48","48", "48", "48", "48", "48", "4","4", "4", "4", "4", "4", "4", "4"))
+conditions=data.frame(treat, hour)
+nrow(conditions) 
+ncol(countData)
+real=newCountDataSet(countData,conditions) 
+real=estimateSizeFactors(real)
+plot(sort(sizeFactors(real))) 
+
+cds=estimateDispersions(real,method="blind")
+vsdBlind=varianceStabilizingTransformation(cds)
+
+#arrayQualityMetrics(vsdBlind,intgroup=c("treat"), force=TRUE)
+```
+
+Based on the arrayQualityMetrics, we determined that there are 5 outliers in our dataset. These samples are b37_10_7.5_4, b37_24_7.5_2, b37_24_7.5_4, b37_4_8_2, and b37_4_8_4.
+
+```{r}
+#Unloads DESeq before loading DESeq2 since the packages conflict
+detach("package:DESeq", unload=TRUE)
+#Load additional packages and filter data
+library(DESeq2) #packageVersion("DESeq2"); citation("DESeq2")
+library(ggplot2) #packageVersion("ggplot2"); citation("ggplot2")
+library(dplyr) #packageVersion("dplyr"); citation("dplyr")
+library(RColorBrewer) #packageVersion("RColorBrewer"); citation("RColorBrewer")
+library(gplots) #packageVersion("gplots"); citation("gplots")
+library(pheatmap) #packageVersion("pheatmap"); citation("pheatmap")
+library(vegan) #packageVersion("vegan"); citation("vegan")
+library(ggrepel) #packageVersion("ggrepel"); citation("ggrepel")
+library(tidyverse) #packageVersion("tidyverse"); citation("tidyverse")
+library(adegenet) #packageVersion("adegenet"); citation("adegenet")
+library(WGCNA) #packageVersion("WGCNA"); citation("WGCNA")
+
+#read in counts (old data pre-filtered)
+countData <- read.table("B37_counts_newtranscriptome.txt")
+head(countData)
+length(countData[,1])
+#26660
+
+names(countData)=sub(".fastq.trim.sam.counts","",names(countData))
+names(countData)
+#row.names(countData)=sub("", "isogroup", rownames(countData))
+names(countData)
+
+#removing outlier samples (generally ones that failed to sequence)
+countData$b37_10_7.5_4 <- NULL
+countData$b37_24_7.5_2 <- NULL
+countData$b37_24_7.5_4 <- NULL
+countData$b37_4_8_2 <- NULL
+countData$b37_4_8_4 <- NULL
+
+totalCounts=colSums(countData)
+totalCounts
+barplot(totalCounts)
+#    b37_0_8_1    b37_0_8_2    b37_0_8_3    b37_0_8_4 b37_10_7.5_1 
+#       402011       437684       407762       126365       377236 
+# b37_10_7.5_2 b37_10_7.5_3   b37_10_8_1   b37_10_8_2   b37_10_8_3 
+#       522103       621347       223739       225729       260243 
+#   b37_10_8_4 b37_24_7.5_1 b37_24_7.5_3   b37_24_8_1   b37_24_8_2 
+#       587962       306236       360527       178560       554924 
+#   b37_24_8_3   b37_24_8_4 b37_48_7.5_1 b37_48_7.5_2 b37_48_7.5_3 
+#       139452       891746       609382      1235041       178275 
+# b37_48_7.5_4   b37_48_8_1   b37_48_8_2   b37_48_8_3   b37_48_8_4 
+#       297157       443670       917558       289920       620377 
+#  b37_4_7.5_1  b37_4_7.5_2  b37_4_7.5_3  b37_4_7.5_4    b37_4_8_1 
+#       605458       916263       314277       324889       926678 
+#    b37_4_8_3 
+#        94004 
+
+min(totalCounts) #94,004
+max(totalCounts)  # 1,235,041
+
+#Remove day 0 data since it can't be compared between treatments (only pH 8 treatment available)
+countData$b37_0_8_1 <- NULL
+countData$b37_0_8_2 <- NULL
+countData$b37_0_8_3 <- NULL
+countData$b37_0_8_4 <- NULL
+
+treat=c( "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8", "pH8", "pH8","pH7.5", "pH7.5", "pH7.5", "pH7.5","pH8", "pH8")
+hour=as.factor(c( "10", "10", "10", "10", "10", "10", "10", "24", "24", "24", "24", "24", "24","48", "48", "48","48", "48", "48", "48", "48", "4","4", "4", "4", "4", "4"))
+```
+
+Total counts between samples were variable and ranged from 94,004 to 1,235,041. 
+
+```{r}
+#Subset data into time points
+g=data.frame(treat, hour)
+g
+colData<- g
+colData4 = colData[colData$hour == 4,]
+colData10 = colData[colData$hour == 10,]
+colData24 = colData[colData$hour == 24,]
+colData48 = colData[colData$hour == 48,]
+
+
+dds<-DESeqDataSetFromMatrix(countData=countData, colData=colData, design=~treat+hour+treat*hour ) 
+head(dds)
+dds4 = dds[,colData$hour == 4]
+head(dds4)
+dds10 = dds[,colData$hour == 10]
+head(dds10)
+dds24 = dds[,colData$hour == 24]
+head(dds24)
+dds48 = dds[,colData$hour == 48]
+head(dds48)
+
+design(dds4) = ~treat
+design(dds10) = ~treat
+design(dds24) = ~treat
+design(dds48) = ~treat
+
+dds<-DESeq(dds)
+dds4<-DESeq(dds4)
+dds10<-DESeq(dds10)
+dds24<-DESeq(dds24)
+dds48<-DESeq(dds48)
+# estimating size factors
+# estimating dispersions
+# gene-wise dispersion estimates
+# mean-dispersion relationship
+# final dispersion estimates
+# fitting model and testing
+
+head(dds)
+res<- results(dds)
+head(dds4)
+res4<- results(dds4)
+head(dds10)
+res10<- results(dds10)
+head(dds24)
+res24<- results(dds24)
+head(dds48)
+res48<- results(dds48)
+
+#Look at dispersions plot
+plotDispEsts(dds, main="Dispersion plot Snails")
+plotDispEsts(dds4, main="Dispersion plot Snails (Hour 4)")
+plotDispEsts(dds10, main="Dispersion plot Snails (Hour 10)")
+plotDispEsts(dds24, main="Dispersion plot Snails (Hour 24)")
+plotDispEsts(dds48, main="Dispersion plot Snails (Hour 48)")
+```
+
+The dispersion plots use a shrinking method to reduce false positives in the differential expression analysis. Black dots represent genes, the red line is a model fit to the genes, and the blue dots are the genes after they've been processed through the shrinking method. Genes with low dispersion estimates are shrunken towards the curve and are the output for differential expression testing. Dispersion estimates slightly above the curve are also shrunken, but those with extreme high dispersion are not. These genes, shown as surrounded by blue circles, likely do not follow the model assumptions and have higher variability. Shrinking them would only lead to false positives. They are not usually outputted for differential gene expression testing.
+
+```{r}
+###Assess Pco2 treatments: pH8 vs pH7.5
+#Hour 4
+respH75.4 <- results(dds4, contrast=c("treat","pH7.5","pH8"))
+table(respH75.4$padj<.1)
+table(respH75.4$padj<.05)
+table(respH75.4$padj<.01)
+# 0.1=2/25789
+# 0.05=0/25789
+# 0.01=0/25789
+summary(respH75.4)
+#LFC>0: 1, 0.0039%
+#LFC<0: 1, 0.0039%
+#Outliers: 0, 0%
+#Low counts: 0, 0%
+
+nrow(respH75.4[respH75.4$padj<0.05 & !is.na(respH75.4$padj),])  
+# Num significantly differentially expressed genes excluding the no/low count genes   #0
+
+#scatterplot of logarithmic fold changes versus the mean of normalized counts
+plotMA(respH75.4, main="pH8 vs pH7.5 (Hour 4)", ylim=c(-1,1))
+
+results75.4 <- as.data.frame(respH75.4)
+head(results75.4)
+
+nrow(respH75.4[respH75.4$padj<0.1 & respH75.4$log2FoldChange > 0 & !is.na(respH75.4$padj),])
+nrow(respH75.4[respH75.4$padj<0.1 & respH75.4$log2FoldChange < -0 & !is.na(respH75.4$padj),])
+#UP in 7.5 (Hour 4): 1
+#DOWN in 7.5 (Hour 4): 1
+
+write.table(respH75.4, file="b37_7.5.4_2017.txt", quote=F, sep="\t")
+
+cp4 <- read.table("b37_7.5.4_2017.txt")
+head(cp4)
+
+MAttPlot <- function(df) {
+  df$dotcol <- ifelse(df$log2FoldChange > 0 & df$padj < 0.1, 'darkorange',
+                      ifelse(df$log2FoldChange < 0 & df$padj < 0.1, 'cyan3', 'black'))
+  df$baseMean <- log2(df$baseMean)
+  print(head(df))
+  gg <- ggplot(df, aes(baseMean, log2FoldChange)) +
+    geom_point(size = .3, color = df$dotcol) +
+    theme_bw() +
+    theme(panel.grid = element_blank())
+  print(gg)
+}
+
+MAttPlot(cp4)
+#orange dots = upregulated, blue dots = downregulated
+
+#Hour 10
+respH75.10 <- results(dds10, contrast=c("treat","pH7.5","pH8"))
+table(respH75.10$padj<.1)
+table(respH75.10$padj<.05)
+table(respH75.10$padj<.01)
+# 0.1=0/25814
+# 0.05=0/25814
+# 0.01=0/25814
+summary(respH75.10)
+#LFC>0: 0, 0%
+#LFC<0: 0, 0%
+#Outliers: 3, 0.012%
+#Low counts: 0, 0%
+
+nrow(respH75.10[respH75.10$padj<0.05 & !is.na(respH75.10$padj),])  
+# Num significantly differentially expressed genes excluding the no/low count genes   #0
+
+plotMA(respH75.10, main="pH8 vs pH7.5 (Hour 10)", ylim=c(-1,1))
+
+results75.10 <- as.data.frame(respH75.10)
+head(results75.10)
+
+nrow(respH75.10[respH75.10$padj<0.1 & respH75.10$log2FoldChange > 0 & !is.na(respH75.10$padj),])
+nrow(respH75.10[respH75.10$padj<0.1 & respH75.10$log2FoldChange < -0 & !is.na(respH75.10$padj),])
+#UP in 7.5 (Hour 10): 0
+#DOWN in 7.5 (Hour 10): 0
+
+write.table(respH75.10, file="b37_7.5.10_2017.txt", quote=F, sep="\t")
+
+cp10 <- read.table("b37_7.5.10_2017.txt")
+head(cp10)
+
+MAttPlot(cp10)
+#orange dots = upregulated, blue dots = downregulated
+
+#Hour 24
+respH75.24 <- results(dds24, contrast=c("treat","pH7.5","pH8"))
+table(respH75.24$padj<.1)
+table(respH75.24$padj<.05)
+table(respH75.24$padj<.01)
+# 0.1=0/25690
+# 0.05=0/25690
+# 0.01=0/25690
+summary(respH75.24)
+#LFC>0: 0, 0%
+#LFC<0: 0, 0%
+#Outliers: 1, 0.0039%
+#Low counts: 0, 0%
+
+nrow(respH75.24[respH75.24$padj<0.05 & !is.na(respH75.24$padj),])  
+# Num significantly differentially expressed genes excluding the no/low count genes   #0
+
+plotMA(respH75.24, main="pH8 vs pH7.5 (Hour 24)", ylim=c(-1,1))
+
+results75.24 <- as.data.frame(respH75.24)
+head(results75.24)
+
+nrow(respH75.24[respH75.24$padj<0.1 & respH75.24$log2FoldChange > 0 & !is.na(respH75.24$padj),])
+nrow(respH75.24[respH75.24$padj<0.1 & respH75.24$log2FoldChange < -0 & !is.na(respH75.24$padj),])
+#UP in 7.5 (Hour 24): 0
+#DOWN in 7.5 (Hour 24): 0
+
+write.table(respH75.24, file="b37_7.5.24_2017.txt", quote=F, sep="\t")
+
+cp24 <- read.table("b37_7.5.24_2017.txt")
+head(cp24)
+
+MAttPlot(cp24)
+#orange dots = upregulated, blue dots = downregulated
+
+#Hour 48
+respH75.48 <- results(dds48, contrast=c("treat","pH7.5","pH8"))
+table(respH75.48$padj<.1)
+table(respH75.48$padj<.05)
+table(respH75.48$padj<.01)
+# 0.1=33/15575
+# 0.05=22/15575
+# 0.01=18/15575
+summary(respH75.48)
+#LFC>0: 18, 0.069%
+#LFC<0: 15, 0.057%
+#Outliers: 7, 0.027%
+#Low counts: 10687, 41%
+
+nrow(respH75.48[respH75.48$padj<0.05 & !is.na(respH75.48$padj),])  
+# Num significantly differentially expressed genes excluding the no/low count genes   #22
+
+#scatterplot of logarithmic fold changes versus the mean of normalized counts
+plotMA(respH75.48, main="pH8 vs pH7.5 (Hour 48)", ylim=c(-1,1))
+
+results75.48 <- as.data.frame(respH75.48)
+head(results75.48)
+
+nrow(respH75.48[respH75.48$padj<0.1 & respH75.48$log2FoldChange > 0 & !is.na(respH75.48$padj),])
+nrow(respH75.48[respH75.48$padj<0.1 & respH75.48$log2FoldChange < -0 & !is.na(respH75.48$padj),])
+#UP in 7.5 (Hour 48): 18
+#DOWN in 7.5 (Hour 48): 15
+
+write.table(respH75.48, file="b37_7.5.48_2017.txt", quote=F, sep="\t")
+
+cp48 <- read.table("b37_7.5.48_2017.txt")
+head(cp48)
+
+MAttPlot(cp48)
+#orange dots = upregulated, blue dots = downregulated
+```
+
+The MA-plot shows log2 fold changes attributable to treatment. Points are red if the adjusted p-value is less than 0.1. Arrows at the top and bottom of the figure indicate points outside the margins of the plot.
+
+The Mattplot is similar except it uses a base mean rather than mean of normalized counts. Orange dots are significantly upregulated and blue dots are significantly downregulated. We can see that 1 gene is differentially upregulated and 1 gene is differentially downregulated at pH 7.5 in comparison to pH 8.0 at 4 hours and 18 are upregulated and 15 are downregulated at 48 hours. There appear to be no differentially regulated genes at hours 10 or 24.
+
+```{r}
+##make the GO table for MWU
+#Hour 4
+cp4$isogroup=row.names(cp4)
+go_input_7.5.4 = cp4 %>%
+  mutate(mutated_p = -log(pvalue)) %>%
+  mutate(mutated_p_updown = ifelse(log2FoldChange < 0, mutated_p*-1, mutated_p*1)) %>%
+  na.omit() %>%
+  select(isogroup, mutated_p_updown)
+head(go_input_7.5.4)
+colnames(go_input_7.5.4) <- c("gene", "pval")
+head(go_input_7.5.4)
+write.csv(go_input_7.5.4, file="b37_7.5.4_rec_GO.csv", quote=F, row.names=FALSE)
+
+#Hour 10
+cp10$isogroup=row.names(cp10)
+go_input_7.5.10 = cp10 %>%
+  mutate(mutated_p = -log(pvalue)) %>%
+  mutate(mutated_p_updown = ifelse(log2FoldChange < 0, mutated_p*-1, mutated_p*1)) %>%
+  na.omit() %>%
+  select(isogroup, mutated_p_updown)
+head(go_input_7.5.10)
+colnames(go_input_7.5.10) <- c("gene", "pval")
+head(go_input_7.5.10)
+write.csv(go_input_7.5.10, file="b37_7.5.10_rec_GO.csv", quote=F, row.names=FALSE)
+
+#Hour 24
+cp24$isogroup=row.names(cp24)
+go_input_7.5.24 = cp24 %>%
+  mutate(mutated_p = -log(pvalue)) %>%
+  mutate(mutated_p_updown = ifelse(log2FoldChange < 0, mutated_p*-1, mutated_p*1)) %>%
+  na.omit() %>%
+  select(isogroup, mutated_p_updown)
+head(go_input_7.5.24)
+colnames(go_input_7.5.24) <- c("gene", "pval")
+head(go_input_7.5.24)
+write.csv(go_input_7.5.24, file="b37_7.5.24_rec_GO.csv", quote=F, row.names=FALSE)
+
+#Hour 48
+cp48$isogroup=row.names(cp48)
+go_input_7.5.48 = cp48 %>%
+  mutate(mutated_p = -log(pvalue)) %>%
+  mutate(mutated_p_updown = ifelse(log2FoldChange < 0, mutated_p*-1, mutated_p*1)) %>%
+  na.omit() %>%
+  select(isogroup, mutated_p_updown)
+head(go_input_7.5.48)
+colnames(go_input_7.5.48) <- c("gene", "pval")
+head(go_input_7.5.48)
+write.csv(go_input_7.5.48, file="b37_7.5.48_rec_GO.csv", quote=F, row.names=FALSE)
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 4
+
+#######MF
+# Edit these to match your data file names: 
+input="b37_7.5.4_rec_GO.csv" # two columns of comma-separated values: gene id, continuous measure of significance. To perform standard GO enrichment analysis based on Fisher's exact test, use binary measure (0 or 1, i.e., either sgnificant or not).
+goAnnotations="crepidula_iso2go.tab" # two-column, tab-delimited, one line per gene, multiple GO terms separated by semicolon. If you have multiple lines per gene, use nrify_GOtable.pl prior to running this script.
+goDatabase="go.obo" # download from http://www.geneontology.org/GO.downloads.ontology.shtml
+goDivision="MF" # either MF, or BP, or CC
+source("gomwu.functions.R")
+
+
+# Calculating stats. It might take ~3 min for MF and BP. Do not rerun it if you just want to replot the data with different cutoffs, go straight to gomwuPlot. If you change any of the numeric values below, delete the files that were generated in previos runs first.
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+	perlPath="perl", # replace with full path to perl executable if it is not in your system's PATH already
+	largest=0.1,  # a GO category will not be considered if it contains more than this fraction of the total number of genes
+	smallest=5,   # a GO category should contain at least this many genes to be considered
+	clusterCutHeight=0.25, # threshold for merging similar (gene-sharing) terms. See README for details.
+#	Alternative="g" # by default the MWU test is two-tailed; specify "g" or "l" of you want to test for "greater" or "less" instead. 
+#	Module=TRUE,Alternative="g" # un-remark this if you are analyzing a SIGNED WGCNA module (values: 0 for not in module genes, kME for in-module genes). In the call to gomwuPlot below, specify absValue=0.001 (count number of "good genes" that fall into the module)
+#	Module=TRUE # un-remark this if you are analyzing an UNSIGNED WGCNA module 
+)
+# do not continue if the printout shows that no GO terms pass 10% FDR.
+
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+#	absValue=-log(0.05,10),  # genes with the measure value exceeding this will be counted as "good genes". Specify absValue=0.001 if you are doing Fisher's exact test for standard GO enrichment or analyzing a WGCNA module (all non-zero genes = "good genes").
+	absValue=1,
+	level1=0.1, # FDR threshold for plotting. Specify level1=1 to plot all GO categories containing genes exceeding the absValue.
+	level2=0.05, # FDR cutoff to print in regular (not italic) font.
+	level3=0.01, # FDR cutoff to print in large bold font.
+	txtsize=1.2,    # decrease to fit more on one page, or increase (after rescaling the plot so the tree fits the text) for better "word cloud" effect
+	treeHeight=0.5, # height of the hierarchical clustering tree
+#	colors=c("dodgerblue2","firebrick1","skyblue2","lightcoral") # these are default colors, un-remar and change if needed
+)
+# manually rescale the plot so the tree matches the text 
+# if there are too many categories displayed, try make it more stringent with level1=0.05,level2=0.01,level3=0.001.  
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 4
+
+#######BP
+#No significant GO terms
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 4
+
+#######CC
+goDivision="CC" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.1,
+                  level2=0.05,
+                  level3=0.01,
+                  txtsize=1.2,
+                  treeHeight=0.5
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 10
+
+#######MF
+input="b37_7.5.10_rec_GO.csv" 
+goDivision="MF" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.1,
+                  level2=0.05,
+                  level3=0.01,
+                  txtsize=1.2,
+                  treeHeight=0.5
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 10
+
+#######BP
+goDivision="BP" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.1,
+                  level2=0.05,
+                  level3=0.01,
+                  txtsize=1.2,
+                  treeHeight=0.5
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 10
+
+#######CC
+goDivision="CC" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.1,
+                  level2=0.05,
+                  level3=0.01,
+                  txtsize=1.2,
+                  treeHeight=0.5
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 24
+
+#######MF
+# Edit these to match your data file names: 
+input="b37_7.5.24_rec_GO.csv"
+goDivision="MF" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.1,
+                  level2=0.05,
+                  level3=0.01,
+                  txtsize=1.2,
+                  treeHeight=0.5
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 24
+
+#######BP
+#No significant GO terms
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 24
+
+#######CC
+goDivision="CC" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.1,
+                  level2=0.05,
+                  level3=0.01,
+                  txtsize=1.2,
+                  treeHeight=0.5,
+                  colors=c("dodgerblue2","firebrick1","skyblue2","lightcoral")
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 48
+
+#######MF
+# Edit these to match your data file names: 
+input="b37_7.5.48_rec_GO.csv"
+goDivision="MF" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.05,
+                  level2=0.01,
+                  level3=0.001,
+                  txtsize=1.2,
+                  treeHeight=0.5
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 48
+
+#######BP
+goDivision="BP" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.05,
+                  level2=0.01,
+                  level3=0.001,
+                  txtsize=1.2,
+                  treeHeight=0.5
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+```{r}
+#GO enrichment analysis
+#Hour 48
+
+#######CC
+goDivision="CC" # either MF, or BP, or CC
+
+gomwuStats(input, goDatabase, goAnnotations, goDivision,
+           perlPath="perl",
+           largest=0.1,
+           smallest=5,
+           clusterCutHeight=0.25
+)
+
+# Plotting results
+results=gomwuPlot(input,goAnnotations,goDivision,
+                  absValue=1,
+                  level1=0.05,
+                  level2=0.01,
+                  level3=0.001,
+                  txtsize=1.2,
+                  treeHeight=0.5
+)
+
+# text representation of results, with actual adjusted p-values
+results
+```
+
+The GO enrichment analyses overall show differences in enrichment between hours. At hour 4, mitochondrial structures and functions and the cytoskeleton are positively enriched and ribosomal structures are negatively enriched. At hour 10, mitochondrial structure and functions remain positively enriched and ribosomal structures become positively enriched. Oxidoreductase and electron transport are also positively enriched, while nuclear functions and kinases are negatively enriched. At hour 24, ribosomal structures remain positively enriched. At hour 48, ribosomal structures revert back to being negatively enriched and oxidoreductase also becomes negatively enriched. By contrast, nuclear structures and kinases become positively enriched. The cytoskeleton and electron transport are once more positively enriched.
+
+Figure 1:
+Significantly enriched gene ontology (GO) categories for the pairwise comparison between pH 7.5 and pH 8.0. Mann-Whitney U (MWU) tests were conducted based on ranking of signed log p-values and the results were plotted as dendograms with an indication of genes shared between categories. Enrichment by 'cellular component', 'biological process' and 'molecular function' are shown for hours 4, 10, 24, and 48. Overrepresented categories relative to pH 8.0 are colored as red and underrepresented categories are colored as blue. A blank grid indicates that there were no significantly enriched categories for that division at that hour.
+
+```{r}
+#Get pvals and make an rlogadata and pval table
+#get pvals
+#Hour 4
+val754=cbind(respH75.4$pvalue, respH75.4$padj)
+head(val754)
+colnames(val754)=c("pval.754", "padj.754")
+length(val754[,1])
+#26660
+table(complete.cases(val754))
+# FALSE  TRUE 
+# 871    25789
+
+#make rlogdata and pvals table
+rlog=rlogTransformation(dds, blind=TRUE) 
+rld=assay(rlog)
+colnames(rld)=paste(colData$treat)
+head(rld)
+length(rld[,1])
+#26660
+
+rlog4=rlogTransformation(dds4, blind=TRUE) 
+rld4=assay(rlog4)
+colnames(rld4)=paste(colData4$treat)
+head(rld4)
+length(rld4[,1])
+#26660
+
+rldpvals4=cbind(rld4,val754)
+head(rldpvals4)
+dim(rldpvals4)
+# [1] 26660    8
+table(complete.cases(rldpvals4))
+# FALSE  TRUE 
+# 871    25789
+
+write.csv(rldpvals4, "Crep2017_b37Final_RLDandPVALS_4.csv", quote=F)
+
+#Hour 10
+val7510=cbind(respH75.10$pvalue, respH75.10$padj)
+head(val7510)
+colnames(val7510)=c("pval.7510", "padj.7510")
+length(val7510[,1])
+#26660
+table(complete.cases(val7510))
+# FALSE  TRUE 
+# 846    25814
+
+#make rlogdata and pvals table
+rlog10=rlogTransformation(dds10, blind=TRUE) 
+rld10=assay(rlog10)
+colnames(rld10)=paste(colData10$treat)
+head(rld10)
+length(rld10[,1])
+#26660
+
+rldpvals10=cbind(rld10,val7510)
+head(rldpvals10)
+dim(rldpvals10)
+# [1] 26660    9
+table(complete.cases(rldpvals10))
+# FALSE  TRUE 
+# 846    25814
+
+write.csv(rldpvals10, "Crep2017_b37Final_RLDandPVALS_10.csv", quote=F)
+
+#Hour 24
+val7524=cbind(respH75.24$pvalue, respH75.24$padj)
+head(val7524)
+colnames(val7524)=c("pval.7524", "padj.7524")
+length(val7524[,1])
+#26660
+table(complete.cases(val7524))
+# FALSE  TRUE 
+# 970    25690
+
+#make rlogdata and pvals table
+rlog24=rlogTransformation(dds24, blind=TRUE) 
+rld24=assay(rlog24)
+colnames(rld24)=paste(colData24$treat)
+head(rld24)
+length(rld24[,1])
+#26660
+
+rldpvals24=cbind(rld24,val7524)
+head(rldpvals24)
+dim(rldpvals24)
+# [1] 26660    8
+table(complete.cases(rldpvals24))
+# FALSE  TRUE 
+# 970    25690
+
+write.csv(rldpvals24, "Crep2017_b37Final_RLDandPVALS_24.csv", quote=F)
+
+#Hour 48
+val7548=cbind(respH75.48$pvalue, respH75.48$padj)
+head(val7548)
+colnames(val7548)=c("pval.7548", "padj.7548")
+length(val7548[,1])
+#26660
+table(complete.cases(val7548))
+# FALSE  TRUE 
+# 11085  15575
+
+#make rlogdata and pvals table
+rlog48=rlogTransformation(dds48, blind=TRUE) 
+rld48=assay(rlog48)
+colnames(rld48)=paste(colData48$treat)
+head(rld48)
+length(rld48[,1])
+#26660
+
+rldpvals48=cbind(rld48,val7548)
+head(rldpvals48)
+dim(rldpvals48)
+# [1] 26660    10
+table(complete.cases(rldpvals48))
+# FALSE  TRUE 
+# 11085  15575
+
+write.csv(rldpvals48, "Crep2017_b37Final_RLDandPVALS_48.csv", quote=F)
+```
+
+```{r}
+#Sample distance heatmap 
+#Hour 4
+sampleDists4 <- dist(t(rld4))
+sampleDistMatrix4 <- as.matrix( sampleDists4 )
+treat4=c( "pH7.5", "pH7.5", "pH7.5", "pH7.5", "pH8", "pH8")
+colnames(sampleDistMatrix4)=paste(treat4)
+rownames(sampleDistMatrix4)=paste(treat4)
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix4,color=colors,cex=0.9,border_color=NA,clustering_distance_rows=sampleDists4,clustering_distance_cols=sampleDists4, main="Sample Distance (Hour 4)")
+
+#Hour 10
+sampleDists10 <- dist(t(rld10))
+sampleDistMatrix10 <- as.matrix( sampleDists10 )
+treat10=c( "pH7.5", "pH7.5", "pH7.5", "pH8", "pH8", "pH8", "pH8")
+colnames(sampleDistMatrix10)=paste(treat10)
+rownames(sampleDistMatrix10)=paste(treat10)
+pheatmap(sampleDistMatrix10,color=colors,cex=0.9,border_color=NA,clustering_distance_rows=sampleDists10,clustering_distance_cols=sampleDists10, main="Sample Distance (Hour 10)")
+
+#Hour 24
+sampleDists24 <- dist(t(rld24))
+sampleDistMatrix24 <- as.matrix( sampleDists24 )
+treat24=c( "pH7.5", "pH7.5", "pH8", "pH8", "pH8", "pH8")
+colnames(sampleDistMatrix24)=paste(treat24)
+rownames(sampleDistMatrix24)=paste(treat24)
+pheatmap(sampleDistMatrix24,color=colors,cex=0.9,border_color=NA,clustering_distance_rows=sampleDists24,clustering_distance_cols=sampleDists24, main="Sample Distance (Hour 24)")
+
+#Hour 48
+sampleDists48 <- dist(t(rld48))
+sampleDistMatrix48 <- as.matrix(sampleDists48)
+treat48=c( "pH7.5", "pH7.5", "pH7.5", "pH7.5", "pH8", "pH8",  "pH8", "pH8")
+colnames(sampleDistMatrix48)=paste(treat48)
+rownames(sampleDistMatrix48)=paste(treat48)
+pheatmap(sampleDistMatrix48,color=colors,cex=0.9,border_color=NA,clustering_distance_rows=sampleDists48,clustering_distance_cols=sampleDists48, main="Sample Distance (Hour 48)")
+```
+
+Generally, sample distances between treatments are larger than within the same treatments, which is expected.
+
+```{r}
+#CCA and adonis(ANOVA)
+mns=apply(countData,1,mean)
+table(mns>1)
+cc=countData[mns>1,]
+cct=t(cc)
+
+conds=data.frame(treat, hour)
+
+# normalizing to total counts
+cct=decostand(cct,method="total")
+# log-transform leaving zeroes as zeroes
+cct=decostand(cct,method="log")
+
+# canonical correspondence analysis (chi-square distances)
+ccaa=cca(cct~treat+hour,conds)
+save(counts,ccaa,conds,file="cca_brood37.RData")
+
+ll=load('cca_brood37.RData')
+
+pt_colors <- ifelse(conds$treat == 'pH7.5', 'green',
+                    ifelse(conds$treat == 'pH8.0', 'red', 'blue'))
+
+plot(ccaa,choices=c(1,2),display="sites",type="n")
+points(ccaa,choices=c(1,2),col=pt_colors,pch=16)
+ #ordispider(ccaa,groups=treat,col=c("green", "blue"))
+#ordispider(ccaa,groups=conds$hour,col=c("green", "blue", "red", "yellow"))
+ordihull(ccaa,groups=conds$hour,draw="polygon",col="grey95",label=T)
+# ordihull(ccaa,groups=source,draw="polygon",col="grey95",label=T)
+
+#Adonis(ANOVA)
+anova(ccaa,by = "term")
+
+# Permutation test for cca under reduced model
+# Terms added sequentially (first to last)
+# Permutation: free
+# Number of permutations: 999
+# 
+# Model: cca(formula = cct ~ treat + hour, data = conds)
+#          Df ChiSquare      F Pr(>F)
+# treat     1  0.005570 0.8696  0.860
+# hour      3  0.019603 1.0202  0.374
+# Residual 22  0.140915 
+```
+
+The CCA shows clear clustering by hour. Treatments overlap within the hours and hours 4 and 10 overlap. Hour 24 is clearly distinguished from all other hours along the y-axis and hour 48 is clearly distinguished along the x- and y-axis from all other hours. These clusterings by hour, however, were found to not be significant (p=0.374).
+
+Figure 2:
+Canonical Correspondence Analysis (CCA) of all r-log transformed isogroups clustered by time point and experimental treatment. Responses of C. fornicata larvae across different hours (p = 0.374) and pH treatments (p = 0.860) were found to not be significant. Colors indicate pH treatment condition: blue = pH 8.0, green = pH 7.5.
+
+```{r}
+#Heatmap for genes
+source("uniHeatmap.R")
+ccol=colorRampPalette(rev(c("red","chocolate1","#FEE090","grey10", "cyan3","cyan")))(100)
+col0=colorRampPalette(rev(c("chocolate1","#FEE090","grey10", "cyan3","cyan")))(100)
+gg=read.table("Crepidula_iso2gene.tab",sep="\t")
+head(gg)
+
+#Hour 4
+rldpvals4 <- read.csv(file="Crep2017_b37Final_RLDandPVALS_4.csv", row.names=1)
+head(rldpvals4)
+rld_site4= rldpvals4[,1:6]
+head(rld_site4)
+
+
+nrow(rldpvals4[rldpvals4$padj.754<0.01& !is.na(rldpvals4$padj.754),])
+#0
+
+topnum= 500 # number of DEGS between treatments
+top500=head(rldpvals4[order(rldpvals4$padj.754), ],topnum)
+length(top500[,1])
+summary(top500)
+
+head(top500)
+p.val=0.1 # FDR cutoff
+conds=top500[top500$padj.754<=p.val & !is.na(top500$padj.754),]
+length(conds[,1])
+#2
+
+exp=conds[,c(1:6)] # change numbers to be your vsd data columns
+means=apply(exp,1,mean) # means of rows
+explc=exp-means # subtracting them
+head(explc)
+
+pheatmap(explc,cluster_cols=F,scale="row",color=col0, show_rownames = F)
+
+#nums=uniHeatmap(vsd=explc,gene.names=gg,metric=top500$padj.754, cutoff=0.1,pdf=F,heat.color=ccol,cex=0.8)
+#nums # totalCutoffPassing, named, patternMatching
+
+#Hour 10
+rldpvals10 <- read.csv(file="Crep2017_b37Final_RLDandPVALS_10.csv", row.names=1)
+head(rldpvals10)
+rld_site10= rldpvals10[,1:7]
+head(rld_site10)
+
+
+nrow(rldpvals10[rldpvals10$padj.7510<0.01& !is.na(rldpvals10$padj.7510),])
+#0
+
+topnum= 500 # number of DEGS between treatments
+top500=head(rldpvals10[order(rldpvals10$padj.7510), ],topnum)
+length(top500[,1])
+summary(top500)
+
+head(top500)
+p.val=0.1 # FDR cutoff
+conds=top500[top500$padj.7510<=p.val & !is.na(top500$padj.7510),]
+length(conds[,1])
+#0
+
+#Hour 24
+rldpvals24 <- read.csv(file="Crep2017_b37Final_RLDandPVALS_24.csv", row.names=1)
+head(rldpvals24)
+rld_site24= rldpvals24[,1:8]
+head(rld_site24)
+
+nrow(rldpvals24[rldpvals24$padj.7524<0.01& !is.na(rldpvals24$padj.7524),])
+#0
+
+topnum= 500 # number of DEGS between treatments
+top500=head(rldpvals24[order(rldpvals24$padj.7524), ],topnum)
+length(top500[,1])
+summary(top500)
+
+head(top500)
+p.val=0.1 # FDR cutoff
+conds=top500[top500$padj.7524<=p.val & !is.na(top500$padj.7524),]
+length(conds[,1])
+#0
+
+#Hour 48 
+rldpvals48 <- read.csv(file="Crep2017_b37Final_RLDandPVALS_48.csv", row.names=1)
+head(rldpvals48)
+rld_site48= rldpvals48[,1:8]
+head(rld_site48)
+
+nrow(rldpvals48[rldpvals48$padj.7548<0.01& !is.na(rldpvals48$padj.7548),])
+#18
+
+topnum= 500 # number of DEGS between treatments
+top500=head(rldpvals48[order(rldpvals48$padj.7548), ],topnum)
+length(top500[,1])
+summary(top500)
+
+head(top500)
+p.val=0.1 # FDR cutoff
+conds=top500[top500$padj.7548<=p.val & !is.na(top500$padj.7548),]
+length(conds[,1])
+#33
+
+exp=conds[,c(1:8)] # change numbers to be your vsd data columns
+means=apply(exp,1,mean) # means of rows
+explc=exp-means # subtracting them
+head(explc)
+
+pheatmap(explc,cluster_cols=F,scale="row",color=col0, show_rownames = F)
+
+#nums=uniHeatmap(vsd=explc,gene.names=gg,metric=top500$padj.7548, cutoff=0.1,pdf=F,heat.color=ccol,cex=0.8)
+#nums # totalCutoffPassing(25), named(5), patternMatching(0)
+```
+
+For hour 4, we see two DEGs and for hour 48 we see 33 DEGs. There does not appear to be DEGs for hours 10 and 24. Of the DEGs found for hours 4 and 24, none appear to be named. Separation is clearly seen between treatments.
+
+```{r}
+#Heatmap for genes in common
+source("uniHeatmap.R")
+ccol=colorRampPalette(rev(c("red","chocolate1","#FEE090","grey10", "cyan3","cyan")))(100)
+col0=colorRampPalette(rev(c("chocolate1","#FEE090","grey10", "cyan3","cyan")))(100)
+
+#Hour 4
+#No genes found in common
+
+#Hour 10
+#No genes found in common
+
+#Hour 24
+#No genes found in common
+
+#Hour 48
+rldpvals48 <- read.csv(file="Crep2017_b37Final_RLDandPVALS_48.csv", row.names=1)
+head(rldpvals48)
+p.val=0.1 # FDR cutoff
+conds=rldpvals48[rldpvals48$padj.7548<=p.val & !is.na(rldpvals48$padj.7548) & rldpvals48$padj.7548<=p.val & !is.na(rldpvals48$padj.7548),]
+rld_data= conds[,c(1:8)]
+head(rld_data)
+nrow(rld_data)
+
+means=apply(rld_data,1,mean) # means of rows
+explc=rld_data-means # subtracting them
+
+pheatmap(explc,cluster_cols=T,scale="row",color=col0, show_rownames = F)
+
+# Make annotation table for pheatmap
+ann = data.frame(cond = c('7.5', '7.5', '7.5', '7.5', '8', '8', '8', '8'))
+rownames(ann) <- names(explc)
+
+# Set colors
+Var1        <- c("darkgoldenrod2", "dodgerblue3")
+names(Var1) <- c("7.5", "8")
+anno_colors <- list(cond = Var1)
+
+pheatmap(as.matrix(explc),annotation_col=ann,annotation_colors=anno_colors,cex=0.8,color=col0,border_color=NA,clustering_distance_rows="correlation",clustering_distance_cols="correlation", show_rownames=T)
+head(conds)
+```
+There were no DEGs in common between pH 7.5 samples relative to pH 8.0 samples at hours 4, 10, and 24. There were 33 for hour 48.
+
+Figure 3:
+Heatmap of top DEGs (FDR-adjusted = 0.1) in common between pH 7.5 samples relative to pH 8.0 samples at hour 48. Columns are indicative of independent libraries and rows represent genes. Colors show fold changes for the genes relative to the mean of the genes. Hierarchical clustering of samples and genes are based on Pearson's correlation. 
+
+
+Conclusion:
+We assessed changes in the gene expression of the intertidal snail Crepidula fornicata after exposure to ocean acidification stress for 4, 10, 24, and 48 hours. We found 33 differentially expressed genes (DEGs) between the pH 7.5 and pH 8.0 treatments at hour 48, with 18 genes upregulated and 15 downregulated by the pH 7.5 treatment relative to the control. Only two DEGs were found at hour 4 (1 upregulated, 1 downregulated) and no DEGs were found for hours 10 and 24. Go enrichment analysis identified differential enrichment between hours, with mitochondrial structures and functions, electron transport, and cytoskeleton consistently positively enriched. Ribosomal and nuclear functions, oxidoreductase, and kinases differed in the direction of their enrichment between hours. CCA showed that samples clustered more by hour than by pH treatment, although this relationship was found to not be significant. These analyses suggest that it may take several days for C. fornicata genes to express differentially when exposed to OA stress and that it takes longer than 48 hours to see broad changes in the transcriptome, but that the transcriptome does start to change even within several hours of exposure. Future studies should aim at analyzing gene expression across various other time intervals within different life stages to get a more holistic representation of how an organism is affected by a stressor.
